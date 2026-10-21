@@ -1,5 +1,25 @@
 # Verification — 2026-10-21
 
+## Version 1.1.0: snip preview
+
+`node tests/check.cjs` passes the existing checks plus release-without-download, plain and love confirmation, Shift-release preference overridden by plain Save, repeated confirmation saving only once, discard, 60-second timeout, persisted expiry without a running timer, stale/replaced tokens, document mismatch, tab switching, navigation, inactive-tab confirmation, delayed capture superseded by a new snip, preview disabled, storage-budget direct-save fallback, and confirmation after a simulated worker restart.
+
+Browser integration passed in isolated Chrome for Testing **151.0.7922.34**, with normal download handling and native **2× device scale**. Seven confirmed/direct snips produced seven PNGs and seven matching sidecars. Verified:
+
+- Release shows a closed-shadow-DOM popover and downloads nothing.
+- A 200 × 160 CSS-pixel selection shows **400 x 320**, with the preview image bounded to 360 CSS pixels and the page's layout unchanged.
+- The preview's exact source pixel confirms the selection overlay was absent from capture.
+- Save, ♥ Save, and Discard buttons; Enter, Shift+Enter, L, and Esc; Shift-release focus.
+- Source-page synthetic Enter/L/Esc events cannot approve or discard a preview; real keypresses still work.
+- Silent cleanup on discard, replacement snip, switching tabs, navigation, and 60 seconds (using an accelerated renderer clock).
+- Confirmation after stopping the actual service-worker target and letting the message wake a new worker.
+- Preview disabled restores immediate snip saving.
+- **Zero service-worker errors** during the run.
+
+A fresh quick adversarial review found that page-generated key events could trigger confirmation. The handler now accepts only trusted keyboard input; a browser regression check dispatches synthetic Enter, L, and Esc while the card is open and confirms nothing is saved or dismissed.
+
+Native command/context-menu dispatch, very large real screenshots, and other browser versions remain manual checks. The sections below record the original 1.0 capture validation.
+
 ## Automated checks: passed
 
 `node tests/check.cjs` uses no third-party packages. It checks manifest settings, PNG icon dimensions, signatures for JPEG/PNG/WebP/GIF/AVIF/SVG, MIME fallback, rejection of an HTML error body, folder validation, local timestamps and offset formatting, all 13 metadata keys, pixel-scaled crop bounds, explicit `saveAs: false`, duplicate and cross-format sidecar naming, independent sidecar-renaming failure feedback, early completion, interrupted-download feedback, and stale snip injection after overlapping starts.

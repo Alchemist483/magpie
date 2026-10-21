@@ -7,8 +7,14 @@ The name is a nod to Eagle, the paid image organiser it replaces. A magpie is th
 ## What it does
 
 - **Save an image:** right-click it and choose **Save to Magpie**. For the ones you really love, choose **Save to Magpie ♥**.
-- **Snip part of a page:** press **Ctrl+Shift+Y** and drag a box. Hold Shift as you let go to mark it as loved.
+- **Snip part of a page:** press **Ctrl+Shift+Y** (or right-click and choose **Snip area to Magpie**) and drag a box. A small preview shows what you captured and its pixel size. Choose **Save**, **♥ Save**, or **Discard**. Nothing is saved until you approve it.
 - **Keep the context:** every save gets a small notes file with the page it came from, its title, the date, and whether you loved it.
+
+In the preview, **Enter** saves normally, **Shift+Enter** or **L** saves as loved, and **Esc** discards. Holding Shift as you finish dragging highlights and focuses **♥ Save**, but still waits for your approval. Click that button or use the love shortcut to keep it loved; Enter always means normal Save.
+
+Previews disappear without saving after 60 seconds, when you leave the page or switch tabs, or when you start another snip. Image right-click saves still happen immediately. For very large snips, Magpie saves directly to avoid filling its temporary storage.
+
+To return to immediate snip saving, open Magpie's **Options** and turn off **Preview snips before saving**. Preview is on by default.
 
 ## Install (Chrome or Brave)
 

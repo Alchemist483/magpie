@@ -1,5 +1,6 @@
 const folder = document.getElementById("folder");
 const metadata = document.getElementById("metadata");
+const previewSnips = document.getElementById("previewSnips");
 const status = document.getElementById("status");
 const path = document.getElementById("path");
 const validFolder = () => {
@@ -11,16 +12,17 @@ const validFolder = () => {
   return !invalid;
 };
 folder.addEventListener("input", () => { validFolder(); status.textContent = ""; });
-chrome.storage.local.get({ folder: "Taste", metadata: true }).then(settings => {
+chrome.storage.local.get({ folder: "Taste", metadata: true, previewSnips: true }).then(settings => {
   folder.value = settings.folder;
   metadata.checked = settings.metadata;
+  previewSnips.checked = settings.previewSnips;
   validFolder();
 }).catch(error => { status.textContent = `Could not load options: ${error.message}`; });
 document.getElementById("options").addEventListener("submit", async event => {
   event.preventDefault();
   if (!validFolder()) { folder.reportValidity(); return; }
   try {
-    await chrome.storage.local.set({ folder: folder.value.trim(), metadata: metadata.checked });
+    await chrome.storage.local.set({ folder: folder.value.trim(), metadata: metadata.checked, previewSnips: previewSnips.checked });
     status.textContent = "Saved.";
   } catch (error) { status.textContent = `Could not save options: ${error.message}`; }
 });

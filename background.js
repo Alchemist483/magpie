@@ -1,4 +1,6 @@
-const DEFAULTS = { folder: "Taste", metadata: true };
+const DEFAULTS = { folder: "Taste", metadata: true, previewSnips: true };
+const PREVIEW_TTL = 60_000;
+const PREVIEW_BUDGET = 8 * 1024 * 1024;
 const MIME_TYPES = {
   jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif",
   avif: "image/avif", svg: "image/svg+xml"
@@ -6,6 +8,8 @@ const MIME_TYPES = {
 const badgeTimers = new Map();
 const finishing = new Map();
 let captureQueue = Promise.resolve();
+let snipQueue = Promise.resolve();
+const previewTimers = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
@@ -32,20 +36,24 @@ chrome.commands.onCommand.addListener((command, tab) => {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 ||
-      !["taste:snip", "taste:cancel"].includes(message?.type)) return;
-  (async () => {
-    const key = `snip:${sender.tab.id}`;
-    const session = (await chrome.storage.session.get(key))[key];
-    if (!session || session.token !== message.token) throw new Error("Snip session expired. Start a new snip.");
-    await chrome.storage.session.remove(key);
-    if (message.type === "taste:snip") await saveSnip(message, sender.tab, session);
-    respond({ ok: true });
-  })().catch(error => {
+      !["taste:snip", "taste:cancel", "taste:confirm"].includes(message?.type)) return;
+  handleSnipMessage(message, sender).then(respond).catch(async error => {
+    await discardSnip(sender.tab.id, message.token).catch(() => {});
     fail(error, sender.tab.id);
     respond({ ok: false });
   });
   return true;
 });
+
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  chrome.storage.session.get(null).then(items => Promise.all(Object.entries(items)
+    .filter(([key, session]) => key.startsWith("snip:") && session.windowId === windowId && key !== `snip:${tabId}`)
+    .map(([key, session]) => discardSnip(Number(key.slice(5)), session.token)))).catch(error => fail(error));
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === "loading" || change.url) discardSnip(tabId).catch(error => fail(error));
+});
+chrome.tabs.onRemoved.addListener(tabId => { discardSnip(tabId).catch(error => fail(error)); });
 
 chrome.downloads.onChanged.addListener(delta => {
   if (delta.state || delta.error) finishDownload(delta.id).catch(error => fail(error));
@@ -57,6 +65,102 @@ chrome.storage.session.get(null).then(items => {
     if (key.startsWith("download:")) finishDownload(Number(key.slice(9))).catch(error => fail(error));
   }
 }).catch(error => fail(error));
+snipState(async () => {
+  const items = await chrome.storage.session.get(null);
+  for (const [key, session] of Object.entries(items)) {
+    if (key.startsWith("snip:") && session.expiresAt) {
+      if (session.expiresAt <= Date.now()) await removeSnip(Number(key.slice(5)), session);
+      else armPreviewTimeout(Number(key.slice(5)), session);
+    }
+  }
+}).catch(error => fail(error));
+
+// Serialize only state transitions: a second confirm must never download twice.
+function snipState(task) {
+  const next = snipQueue.then(task);
+  snipQueue = next.catch(() => {});
+  return next;
+}
+
+async function removeSnip(tabId, session) {
+  if (!session) return;
+  clearTimeout(previewTimers.get(session.token));
+  previewTimers.delete(session.token);
+  await chrome.storage.session.remove([`snip:${tabId}`, `preview:${session.token}`]);
+}
+
+function discardSnip(tabId, token) {
+  return snipState(async () => {
+    const session = (await chrome.storage.session.get(`snip:${tabId}`))[`snip:${tabId}`];
+    if (!session || (token && session.token !== token)) return;
+    await removeSnip(tabId, session);
+    chrome.tabs.sendMessage(tabId, { type: "taste:discard-snip", token: session.token }, { frameId: 0 }).catch(() => {});
+  });
+}
+
+function armPreviewTimeout(tabId, session) {
+  clearTimeout(previewTimers.get(session.token));
+  previewTimers.set(session.token, setTimeout(() => {
+    discardSnip(tabId, session.token).catch(error => fail(error));
+  }, Math.max(0, session.expiresAt - Date.now())));
+}
+
+async function isSnipActive(tab, session) {
+  const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  return active?.id === tab.id && active.url === session.url;
+}
+
+async function handleSnipMessage(message, sender) {
+  const tab = sender.tab;
+  const claimed = await snipState(async () => {
+    const key = `snip:${tab.id}`;
+    const session = (await chrome.storage.session.get(key))[key];
+    if (!session || session.token !== message.token ||
+        (session.documentId && session.documentId !== sender.documentId)) return null;
+    if (message.type === "taste:cancel" || (session.expiresAt && session.expiresAt <= Date.now())) {
+      await removeSnip(tab.id, session);
+      return null;
+    }
+    if (message.type === "taste:confirm") {
+      if (session.stage !== "preview") return null;
+      const pending = (await chrome.storage.session.get(`preview:${session.token}`))[`preview:${session.token}`];
+      if (!pending) { await removeSnip(tab.id, session); return null; }
+      if (!await isSnipActive(tab, session)) { await removeSnip(tab.id, session); return null; }
+      await removeSnip(tab.id, session);
+      return { session, pending };
+    }
+    if (session.stage !== "selecting") return null;
+    await chrome.storage.session.set({ [key]: { ...session, stage: "capturing" } });
+    return { session };
+  });
+  if (!claimed) return { ok: false };
+  if (claimed.pending) {
+    await writeSnip(claimed.pending, tab, claimed.session, Boolean(message.love));
+    return { ok: true };
+  }
+  const crop = await captureSnip(message, tab, claimed.session);
+  if (!crop) { await discardSnip(tab.id, message.token); return { ok: false }; }
+  const settings = await chrome.storage.local.get(DEFAULTS);
+  const outcome = await snipState(async () => {
+    const key = `snip:${tab.id}`;
+    const current = (await chrome.storage.session.get(key))[key];
+    if (current?.token !== message.token || current.stage !== "capturing") return null;
+    if (!await isSnipActive(tab, current)) { await removeSnip(tab.id, current); return null; }
+    const used = await chrome.storage.session.getBytesInUse(null);
+    // Budget for UTF-16 strings and job bookkeeping, below session's 10 MB quota.
+    if (!settings.previewSnips || crop.dataUrl.length > PREVIEW_BUDGET || used + crop.dataUrl.length * 2 + 4096 > PREVIEW_BUDGET) {
+      await removeSnip(tab.id, current);
+      return { direct: true };
+    }
+    const session = { ...current, stage: "preview", expiresAt: Date.now() + PREVIEW_TTL };
+    await chrome.storage.session.set({ [key]: session, [`preview:${session.token}`]: crop });
+    armPreviewTimeout(tab.id, session);
+    return { preview: { ...crop, token: session.token, expiresAt: session.expiresAt } };
+  });
+  if (!outcome) return { ok: false };
+  if (outcome.direct) await writeSnip(crop, tab, claimed.session, crop.love);
+  return { ok: true, ...(outcome.preview ? { preview: outcome.preview } : {}) };
+}
 
 function badge(ok, tabId) {
   const target = Number.isInteger(tabId) ? { tabId } : {};
@@ -209,13 +313,22 @@ async function startSnip(tab) {
   }
   const key = `snip:${tab.id}`;
   const token = crypto.randomUUID();
-  await chrome.storage.session.set({ [key]: { token, url: tab.url, title: tab.title || "" } });
+  await snipState(async () => {
+    await removeSnip(tab.id, (await chrome.storage.session.get(key))[key]);
+    await chrome.storage.session.set({ [key]: { token, url: tab.url, title: tab.title || "", windowId: tab.windowId, stage: "selecting" } });
+  });
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["snip.js"] });
-    if ((await chrome.storage.session.get(key))[key]?.token !== token) return;
+    const [injection] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["snip.js"] });
+    const current = await snipState(async () => {
+      const session = (await chrome.storage.session.get(key))[key];
+      if (session?.token !== token) return false;
+      if (injection?.documentId) await chrome.storage.session.set({ [key]: { ...session, documentId: injection.documentId } });
+      return true;
+    });
+    if (!current) return;
     await chrome.tabs.sendMessage(tab.id, { type: "taste:start-snip", token }, { frameId: 0 });
   } catch (error) {
-    if ((await chrome.storage.session.get(key))[key]?.token === token) await chrome.storage.session.remove(key);
+    await discardSnip(tab.id, token);
     throw error;
   }
 }
@@ -231,15 +344,11 @@ function cropBounds(rect, viewport, width, height) {
     h: Math.min(height, Math.ceil((rect.y + rect.h) * sy)) - y };
 }
 
-async function saveSnip(message, tab, session) {
+async function captureSnip(message, tab, session) {
   cropBounds(message.rect, message.viewport, message.viewport?.w, message.viewport?.h);
-  const assertActive = async () => {
-    const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-    if (active?.id !== tab.id || active.url !== session.url) throw new Error("The page changed before capture. Please snip again.");
-  };
-  await assertActive();
+  if (!await isSnipActive(tab, session)) return null;
   const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-  await assertActive();
+  if (!await isSnipActive(tab, session)) return null;
   const bitmap = await createImageBitmap(await (await fetch(screenshot)).blob());
   let blob, crop;
   try {
@@ -248,10 +357,15 @@ async function saveSnip(message, tab, session) {
     canvas.getContext("2d").drawImage(bitmap, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
     blob = await canvas.convertToBlob({ type: "image/png" });
   } finally { bitmap.close(); }
+  return { dataUrl: dataUrl(new Uint8Array(await blob.arrayBuffer()), "image/png"), width: crop.w, height: crop.h,
+    rect: message.rect, love: Boolean(message.love) };
+}
+
+async function writeSnip(crop, tab, session, love) {
   const settings = await chrome.storage.local.get(DEFAULTS);
   const folder = folderName(settings.folder);
-  const result = metadata("snip", message.love, session, null, { width: crop.w, height: crop.h }, message.rect);
-  await saveCapture(dataUrl(new Uint8Array(await blob.arrayBuffer()), "image/png"), `${folder}/${result.base}.png`, {
+  const result = metadata("snip", love, session, null, { width: crop.width, height: crop.height }, crop.rect);
+  await saveCapture(crop.dataUrl, `${folder}/${result.base}.png`, {
     tabId: tab.id, folder, meta: settings.metadata ? result.meta : null
   });
 }

@@ -24,13 +24,22 @@ See Chrome's [Downloads API](https://developer.chrome.com/docs/extensions/refere
 
 - **Image:** right-click an image and choose **Save to Magpie**. The menu action immediately starts the save.
 - **Love:** choose **Save to Magpie ♥ (love it)** for a `_love` filename and `love: true` metadata.
-- **Snip:** press **Ctrl+Shift+Y**, or right-click the page and choose **Snip area to Magpie**. Drag a rectangle and release to save it as PNG. Hold **Shift when releasing** to mark it as loved.
+- **Snip:** press **Ctrl+Shift+Y**, or right-click the page and choose **Snip area to Magpie**. Drag a rectangle and release to capture a PNG. A preview card shows the image, scaled to at most 360 × 360 CSS pixels, and its actual pixel dimensions. It appears beside the selected area when space permits, otherwise centred.
+- **Approve:** choose **Save**, **♥ Save**, or **Discard**. **Enter** saves normally, **Shift+Enter** or **L** saves as loved, and **Esc** discards. Shift held on drag release visually marks and focuses **♥ Save** but does not save. Enter remains normal Save regardless of which button is focused. Tab / Shift+Tab moves between the three buttons.
 - **Cancel:** press **Esc**, or click without dragging. Switching away or resizing during selection also cancels.
 - A green **✓** badge means the image and, if enabled, its sidecar finished downloading. A red **!** means a capture or download failed. Badges clear after about 1.5 seconds. Error details appear in Magpie's service-worker console, accessible from `chrome://extensions`.
 
 If the shortcut is already taken, assign it at `chrome://extensions/shortcuts`. Chrome blocks overlay injection on `chrome://` pages, the Chrome Web Store, other extension pages, and some built-in viewers; snipping there reports failure. HTTP(S) and local files with extension file access enabled support the overlay. Image saving can still work where reading the page's alt text is blocked.
 
-No preview, confirmation, or save dialog is added by Magpie. Snipping inherently involves invoking the tool and dragging the area.
+The preview uses the same closed shadow DOM and top-layer popover as the selection overlay. It changes no styles or layout on the underlying page. The selection overlay is removed and two animation frames pass before capture, so neither overlay nor preview appears in the PNG. Right-click image saving has no preview.
+
+## Pending snips
+
+Releasing a selection crops the screenshot without downloading. The worker stores the PNG data URL and crop details at `preview:<snip token>` in `chrome.storage.session`; `snip:<tab ID>` records the same token, the source document and page, the preview stage, and its expiry. Confirm/discard messages must match the current token and document. Confirm also requires the original tab and URL to remain active. State transitions are serialized so repeated confirmation cannot download twice. A new snip invalidates the old token before injection; a delayed old crop cannot create a new preview.
+
+The card and worker both schedule silent disposal after 60 seconds. Confirmation checks the persisted deadline even if the worker has suspended and lost its timer; startup re-arms unexpired timers and removes expired records. Page hiding, tab switches, navigation, tab closure, and a new snip remove pending data. Save consumes the token before downloading, while Discard never writes a file. The filename and `saved_at` use the time you confirm; the dimensions, rectangle, page URL and title describe the captured snip.
+
+PNG data URLs above 8 MiB skip preview and save directly with the original Shift-release love choice. Magpie also falls back to direct saving when estimated total session usage would exceed an 8 MiB safety budget, leaving space below Chrome's 10 MiB session quota. This conservative estimate counts two bytes per URL character, so a preview may be skipped before the URL itself reaches 8 MiB. No extra permission is needed.
 
 ## Files and metadata
 
@@ -80,6 +89,7 @@ Right-click Magpie's toolbar icon and select **Options**, or open its details in
 
 - **Subfolder inside Downloads:** defaults to `Taste`. One folder name, up to 80 characters; absolute paths, separators, and Windows reserved names are rejected.
 - **Write metadata sidecars:** on by default. Turning it off saves only images/snips.
+- **Preview snips before saving:** on by default, including when upgrading from an older version. Turn it off for the original immediate-save behavior; Shift on release then marks the snip as loved.
 
 Click **Save options**. Existing files stay in their original folder.
 
@@ -91,7 +101,7 @@ Click **Save options**. Existing files stay in their original folder.
 | `downloads` | Writes captures/sidecars to relative paths under Chrome's default download directory, monitors completion, and checks filenames to avoid collisions. |
 | `activeTab` | Grants access when you invoke a capture; used by screenshot capture and script injection. |
 | `scripting` | Injects the area overlay and reads image alt text, dimensions, and blob bytes from the image's frame. No persistent page content script runs. |
-| `storage` | Stores the two options locally and pending jobs/snipping tokens in session storage so worker suspension does not lose download bookkeeping. |
+| `storage` | Stores the three options locally and pending jobs, snipping tokens, and bounded preview crops in session storage so worker suspension does not lose pending state. |
 | Host permission `<all_urls>` | Lets the worker fetch image resources on arbitrary hosts without page CORS restrictions and access the source page/frame on demand. Chrome displays a broad site-access warning for this permission. |
 
 No `tabs`, notifications, clipboard, native-messaging, or `downloads.ui` permission. Optional bubble suppression was skipped because it controls download UI across the entire Chrome profile and requires another permission. Chrome's normal download bubble remains.
