@@ -1,0 +1,42 @@
+# Verification — 2026-10-21
+
+## Automated checks: passed
+
+`node tests/check.cjs` uses no third-party packages. It checks manifest settings, PNG icon dimensions, signatures for JPEG/PNG/WebP/GIF/AVIF/SVG, MIME fallback, rejection of an HTML error body, folder validation, local timestamps and offset formatting, all 13 metadata keys, pixel-scaled crop bounds, explicit `saveAs: false`, duplicate and cross-format sidecar naming, independent sidecar-renaming failure feedback, early completion, interrupted-download feedback, and stale snip injection after overlapping starts.
+
+## Browser integration: passed with download-location prompting off
+
+Ran the unpacked extension in an isolated Chrome for Testing **151.0.7922.34** profile on Windows, using Chrome's own download handling with no DevTools download-behavior override. Native device scale was **2×**. Used a local HTTP fixture and real image/download/screenshot APIs.
+
+- Nine captures in `Taste/` and nine matching JSON sidecars, plus one image in a custom folder with sidecars disabled.
+- PNG bytes at a `.jpg` URL with the wrong Content-Type: saved as PNG.
+- WebP, data URL, and page-owned blob image: saved successfully.
+- Love image: filename and boolean matched.
+- Concurrent duplicate names: both preserved with matching JSON filenames.
+- HTTP 403 during image fetch: direct-download fallback succeeded.
+- A 200 × 160 CSS-pixel snip became a **400 × 320 PNG**. Its central pixel exactly matched the source color, confirming the overlay was absent. Shift on release marked it loved.
+- Escape and click-only cancellation produced no files.
+- Options validation, saving, custom folder, and disabled metadata worked.
+- Restricted `chrome://` snip produced a red badge and one expected descriptive error.
+- **Zero service-worker errors during successful actions.**
+
+The browser harness invoked image-save functions and snip startup directly in the worker; it performed the drag, Shift release, and cancellation in the actual page. A human still needs to check native context-menu selection and keyboard-command dispatch using `MANUAL-TESTS.md`.
+
+## Required behavior that failed platform validation
+
+With Chrome's **“Ask where to save each file before downloading” enabled**, a normal browser process left the download awaiting a location prompt despite `saveAs: false`. This requirement is **unfulfilled** under the specified APIs and permissions. Turning the browser preference off made the tested downloads dialog-free. Magpie does not change this global preference.
+
+Optional `downloads.ui` bubble suppression was intentionally skipped; the download bubble may appear.
+
+## Fresh adversarial subagent review
+
+The reviewer independently inspected the code and reproduced two edge cases with isolated VM harnesses:
+
+- A delayed first snip injection could replace a newer overlay with an expired token. Fixed by discarding stale injection completions and preserving newer sessions during failure cleanup. A regression check delays the first injection and confirms only the current token reaches the page.
+- Old files absent from download history can cause Chrome to uniquify a sidecar separately. Added final filename validation and red failure feedback. This detects the mismatch and preserves both files; it cannot automatically rename them through the Downloads API. Recovery is documented in REFERENCE.md.
+
+The review did not perform native context-menu or keyboard-command dispatch.
+
+## Not verified
+
+Google Drive desktop syncing, enterprise policies, other Chrome versions, every website's hotlink protection, worker interruption during an actual browser shutdown, and very large images beyond Chrome's memory/message limits. GIF/AVIF/SVG detection was checked with signatures/source fixtures rather than live site downloads.

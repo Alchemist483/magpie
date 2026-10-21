@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Magpie",
+  "version": "1.0.0",
+  "description": "Save beautiful images and area snips straight to your taste library.",
+  "minimum_chrome_version": "120",
+  "permissions": ["contextMenus", "downloads", "activeTab", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Magpie — right-click an image or press Alt+Shift+S",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "commands": {
+    "snip-area": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Snip an area to Magpie"
+    }
+  }
+}

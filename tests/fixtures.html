@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Magpie test images</title>
+  <style>
+    body { font: 16px/1.5 system-ui; padding: 24px; max-width: 900px; margin: auto; }
+    main { display: flex; flex-wrap: wrap; gap: 24px; }
+    figure { margin: 0; } img { width: 144px; height: 144px; object-fit: contain; background: #eee; }
+    #snip-target { width: 300px; height: 180px; background: #ed2d3d; color: white; display: grid; place-items: center; margin: 32px 0; }
+  </style>
+</head>
+<body>
+  <h1>Magpie test images</h1>
+  <p>Right-click each image to save it. This page makes no external network requests.</p>
+  <main>
+    <figure><img src="../icons/128.png" alt="Normal PNG heart"><figcaption>Normal HTTP PNG</figcaption></figure>
+    <figure><img id="webp" alt="WebP gradient"><figcaption>WebP</figcaption></figure>
+    <figure><img id="data" alt="Inline PNG gradient"><figcaption>Data URL PNG</figcaption></figure>
+    <figure><img id="blob" alt="Blob PNG gradient"><figcaption>Blob PNG</figcaption></figure>
+  </main>
+  <div id="snip-target">Snip this area · Shift to love</div>
+  <p>Escape or a click without dragging should cancel without creating any files.</p>
+  <script src="fixtures.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Magpie options</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { max-width: 420px; margin: 64px auto; padding: 0 24px; }
+    h1 { font-size: 26px; margin-bottom: 8px; }
+    p { color: light-dark(#53645b, #b1bfb7); }
+    label { display: block; margin: 24px 0 8px; }
+    input[type=text] { box-sizing: border-box; width: 100%; padding: 10px; font: inherit; }
+    input[type=checkbox] { margin-right: 8px; accent-color: #16834a; }
+    button { margin-top: 20px; padding: 10px 20px; font: inherit; border: 0; border-radius: 6px; background: #16834a; color: #fff; cursor: pointer; }
+    #status { min-height: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Magpie</h1>
+  <p>Your library, one capture at a time.</p>
+  <form id="options">
+    <label for="folder">Subfolder inside Downloads</label>
+    <input id="folder" type="text" value="Taste" maxlength="80" required aria-describedby="path" autocomplete="off">
+    <p id="path">Files go to Downloads/Taste/</p>
+    <label><input id="metadata" type="checkbox" checked>Write metadata sidecars</label>
+    <button type="submit">Save options</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </form>
+  <script src="options.js"></script>
+</body>
+</html>
