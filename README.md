@@ -47,3 +47,7 @@ Back up the real folder with Google Drive for desktop or any other sync tool.
 - [Test results](docs/TEST-RESULTS.md)
 
 Developers can run `node tests/check.cjs` (Node.js, no packages needed).
+
+## License
+
+MIT. Free to use, change and share. See [LICENSE](LICENSE).
