@@ -52,7 +52,7 @@ const call = (name, ...args) => context[name](...args);
 (async () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.commands['snip-area'].suggested_key.default, 'Alt+Shift+S');
+  assert.equal(manifest.commands['snip-area'].suggested_key.default, 'Ctrl+Shift+Y');
   for (const size of [16, 48, 128]) {
     const png = fs.readFileSync(path.join(root, `icons/${size}.png`));
     assert.equal(png.readUInt32BE(16), size);

@@ -24,7 +24,7 @@ See Chrome's [Downloads API](https://developer.chrome.com/docs/extensions/refere
 
 - **Image:** right-click an image and choose **Save to Magpie**. The menu action immediately starts the save.
 - **Love:** choose **Save to Magpie ♥ (love it)** for a `_love` filename and `love: true` metadata.
-- **Snip:** press **Alt+Shift+S**, or right-click the page and choose **Snip area to Magpie**. Drag a rectangle and release to save it as PNG. Hold **Shift when releasing** to mark it as loved.
+- **Snip:** press **Ctrl+Shift+Y**, or right-click the page and choose **Snip area to Magpie**. Drag a rectangle and release to save it as PNG. Hold **Shift when releasing** to mark it as loved.
 - **Cancel:** press **Esc**, or click without dragging. Switching away or resizing during selection also cancels.
 - A green **✓** badge means the image and, if enabled, its sidecar finished downloading. A red **!** means a capture or download failed. Badges clear after about 1.5 seconds. Error details appear in Magpie's service-worker console, accessible from `chrome://extensions`.
 

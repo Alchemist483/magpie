@@ -7,7 +7,7 @@ The name is a nod to Eagle, the paid image organiser it replaces. A magpie is th
 ## What it does
 
 - **Save an image:** right-click it and choose **Save to Magpie**. For the ones you really love, choose **Save to Magpie ♥**.
-- **Snip part of a page:** press **Alt+Shift+S** and drag a box. Hold Shift as you let go to mark it as loved.
+- **Snip part of a page:** press **Ctrl+Shift+Y** and drag a box. Hold Shift as you let go to mark it as loved.
 - **Keep the context:** every save gets a small notes file with the page it came from, its title, the date, and whether you loved it.
 
 ## Install (Chrome or Brave)
@@ -17,7 +17,7 @@ The name is a nod to Eagle, the paid image organiser it replaces. A magpie is th
 3. Click **Load unpacked** and pick the unzipped folder.
 4. In your browser's download settings (`chrome://settings/downloads` or `brave://settings/downloads`), turn **off** "Ask where to save each file before downloading". Otherwise the browser still shows a save dialog. This setting applies to all downloads, not just Magpie.
 
-If Alt+Shift+S does nothing, another app may already use it. You can change the shortcut at `chrome://extensions/shortcuts` (or `brave://extensions/shortcuts`).
+If Ctrl+Shift+Y does nothing, another app may already use it. (Avoid Alt+Shift combos on Windows, which uses Alt+Shift to switch keyboard language.) You can change the shortcut at `chrome://extensions/shortcuts` (or `brave://extensions/shortcuts`).
 
 ## Where files go
 
