@@ -13,7 +13,13 @@ const errors = [];
 const badges = [];
 const uiChanges = [];
 const menus = [];
-const savedMessages = [];
+const savedChecks = [], feedbackInstalls = [];
+let feedbackReady = true;
+const feedbackScript = async options => {
+  if (options.files) { feedbackInstalls.push(options); feedbackReady = true; }
+  else if (feedbackReady) savedChecks.push({ tabId: options.target.tabId, target: { documentIds: options.target.documentIds } });
+  return [{ result: feedbackReady }];
+};
 let renameNextSidecar = false;
 let now = Date.now();
 let timerId = 0;
@@ -34,12 +40,11 @@ const chrome = {
     onActivated: listener('activated'), onUpdated: listener('updated'), onRemoved: listener('removed'),
     query: async () => [activeTab],
     sendMessage: async (tabId, message, target) => {
-      if (message.type === 'taste:saved') savedMessages.push({ tabId, target });
       return { ok: true };
     },
     captureVisibleTab: async () => `data:image/png;base64,${cropBytes.toString('base64')}`
   },
-  scripting: { executeScript: async () => [{ documentId: 'doc-7' }] },
+  scripting: { executeScript: async options => options.target.documentIds ? feedbackScript(options) : [{ documentId: 'doc-7' }] },
   storage: {
     local: { get: async defaults => ({ ...defaults, ...preferences }) },
     session: {
@@ -85,7 +90,7 @@ const call = (name, ...args) => context[name](...args);
   await call('snipState', async () => {});
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '1.2.1');
+  assert.equal(manifest.version, '1.2.2');
   assert.equal(manifest.commands['snip-area'].suggested_key.default, 'Ctrl+Shift+Y');
   assert.equal(manifest.commands['save-hovered'].suggested_key.default, 'Ctrl+Shift+E');
   assert.deepEqual(Object.keys(manifest.commands).sort(), ['save-hovered', 'snip-area']);
@@ -129,8 +134,18 @@ const call = (name, ...args) => context[name](...args);
   }
   assert.equal(downloads[1].options.filename, 'Taste/meta/test (1).json');
   assert.equal(JSON.parse(decodeURIComponent(downloads[1].options.url.split(',')[1])).file, 'test (1).webp');
-  assert.deepEqual(JSON.parse(JSON.stringify(savedMessages)), [{ tabId: 7, target: { documentId: 'source-document' } }], 'one confirmation after the sidecar finishes, addressed to the source document');
+  assert.deepEqual(JSON.parse(JSON.stringify(savedChecks)), [{ tabId: 7, target: { documentIds: ['source-document'] } }], 'one confirmation after the sidecar finishes, addressed to the source document');
   assert.equal(Object.keys(session).length, 0);
+  feedbackReady = false;
+  await call('saved', { tabId: 7, documentId: 'existing-page' });
+  assert.equal(feedbackInstalls.length, 1, 'missing feedback is installed on demand');
+  assert.deepEqual(JSON.parse(JSON.stringify(feedbackInstalls[0].target)), { tabId: 7, documentIds: ['existing-page'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(savedChecks.at(-1).target)), { documentIds: ['existing-page'] });
+  const originalScript = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async () => { throw new Error('Document was navigated away'); };
+  await call('saved', { tabId: 7, documentId: 'old-document' });
+  assert.equal(errors.length, 0, 'missing documents do not turn completed downloads into failure');
+  chrome.scripting.executeScript = originalScript;
   assert.ok(uiChanges.some(change => change.enabled === false));
   assert.equal(uiChanges.at(-1).enabled, true);
   assert.ok(uiChanges.filter(change => change.enabled).every(change => change.pending === 0), 'UI only returns when the image and sidecar have finished');
@@ -166,12 +181,12 @@ const call = (name, ...args) => context[name](...args);
     if (options.filename.endsWith('.json')) downloads.at(-1).state = 'in_progress';
     return id;
   };
-  const beforeSidecar = savedMessages.length;
+  const beforeSidecar = savedChecks.length;
   await call('download', 'data:image/png;base64,AA==', 'Taste/slow-sidecar.png', { folder: 'Taste', meta: result.meta, tabId: 7, documentId: 'frame-four' });
-  assert.equal(savedMessages.length, beforeSidecar, 'no success while metadata is still downloading');
+  assert.equal(savedChecks.length, beforeSidecar, 'no success while metadata is still downloading');
   downloads.at(-1).state = 'complete'; await call('finishDownload', downloads.at(-1).id);
-  assert.equal(savedMessages.length, beforeSidecar + 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(savedMessages.at(-1).target)), { documentId: 'frame-four' });
+  assert.equal(savedChecks.length, beforeSidecar + 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedChecks.at(-1).target)), { documentIds: ['frame-four'] });
   chrome.downloads.download = originalDownload;
   assert.ok(badges.includes('✓'));
   await Promise.all([
@@ -183,12 +198,12 @@ const call = (name, ...args) => context[name](...args);
   assert.ok(downloads.some(item => item.options.filename === 'Taste/meta/collision (1).json'));
   renameNextSidecar = true;
   const badgeCount = badges.length;
-  const beforeFailedSidecar = savedMessages.length;
+  const beforeFailedSidecar = savedChecks.length;
   await call('download', 'data:image/png;base64,AA==', 'Taste/orphan.png', { folder: 'Taste', meta: result.meta, tabId: 7 });
   assert.equal(errors.length, 1);
   assert.match(errors[0].join(' '), /Metadata filename collision/);
   assert.deepEqual(badges.slice(badgeCount), ['!']);
-  assert.equal(savedMessages.length, beforeFailedSidecar, 'failed sidecar never shows a success check');
+  assert.equal(savedChecks.length, beforeFailedSidecar, 'failed sidecar never shows a success check');
   // Completing before the session record exists must still be processed later.
   const failedId = downloads.length + 1;
   await call('finishDownload', failedId);
@@ -202,7 +217,7 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(uiChanges.at(-1).enabled, true, 'interrupted saves restore UI');
   const hoverEvents = {};
   const checkNodes = [], checkTimers = new Map();
-  let hoverMessage, checkTimerId = 0;
+  let checkTimerId = 0;
   const image = { localName: 'img' };
   let inside = true, hits = [image], lastPoint;
   const doc = {
@@ -219,11 +234,12 @@ const call = (name, ...args) => context[name](...args);
     addEventListener: (name, callback) => { hoverEvents[name] = callback; }
   };
   const hoverContext = vm.createContext({ document: doc, innerWidth: 800, innerHeight: 600,
-    chrome: { runtime: { id: 'test', onMessage: { addListener: fn => { hoverMessage = fn; } } } },
+    tasteHoveredImage: () => image,
     setTimeout: (callback, delay) => { checkTimers.set(++checkTimerId, { callback, delay }); return checkTimerId; },
     clearTimeout: id => checkTimers.delete(id),
     window: { addEventListener: (name, callback) => { hoverEvents[name] = callback; } } });
   vm.runInContext(fs.readFileSync(path.join(root, 'hover.js'), 'utf8'), hoverContext);
+  assert.equal(typeof hoverContext.tasteShowSaved, 'function', 'an old hover helper must not block feedback installation');
   assert.equal(hoverContext.tasteHoveredImage(), image);
   hoverEvents.pointermove({ isTrusted: true, clientX: 50, clientY: 60 });
   hits = [{ localName: 'div' }, image];
@@ -245,34 +261,34 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(hoverContext.tasteHoveredImage(), null);
   inside = true; doc.hidden = true;
   assert.equal(hoverContext.tasteHoveredImage(), null);
-  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  hoverContext.tasteShowSaved();
   assert.equal(checkNodes.length, 0, 'hidden pages never show success');
   doc.hidden = false;
-  hoverMessage({ type: 'taste:saved' }, { id: 'page' });
-  assert.equal(checkNodes.length, 0, 'only extension messages can show success');
   hoverEvents.pointermove({ isTrusted: true, clientX: 100, clientY: 120 });
-  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  hoverContext.tasteShowSaved();
   assert.equal(checkNodes.length, 1);
   assert.equal(checkNodes[0].shadowMode, 'closed');
   assert.equal(checkNodes[0].attributes.role, 'status');
   assert.equal(checkNodes[0].attributes['aria-label'], 'Saved to Magpie');
+  hoverEvents.blur();
+  assert.equal(checkNodes.length, 1, 'brief browser focus loss must not erase successful feedback');
   assert.equal(checkNodes[0].style.left, '114px');
   assert.equal(checkNodes[0].style.top, '134px');
   assert.match(checkNodes[0].style.cssText, /pointer-events:none/);
   hoverEvents.pointermove({ isTrusted: true, clientX: 798, clientY: 599 });
   assert.equal(checkNodes[0].style.left, '760px');
   assert.equal(checkNodes[0].style.top, '561px');
-  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  hoverContext.tasteShowSaved();
   assert.equal(checkNodes.length, 1, 'rapid saves reuse one check');
   assert.equal(checkTimers.size, 1);
   const timer = [...checkTimers.values()][0];
   assert.equal(timer.delay, 1200);
   timer.callback();
   assert.equal(checkNodes.length, 0, 'confirmation expires');
-  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
-  hoverMessage({ type: 'taste:hide-saved' }, { id: 'test' });
+  hoverContext.tasteShowSaved();
+  hoverContext.tasteHideSaved();
   assert.equal(checkNodes.length, 0, 'snip capture can clear confirmation');
-  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  hoverContext.tasteShowSaved();
   doc.hidden = true; hoverEvents.visibilitychange();
   assert.equal(checkNodes.length, 0, 'leaving the tab removes confirmation');
 
@@ -449,5 +465,5 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(session.downloadUiHidden, undefined, 'worker startup releases orphan UI suppression');
   assert.equal(uiChanges.at(-1).enabled, true);
   assert.equal(errors.length, 2, 'stale/expired/discard messages stay quiet');
-  console.log('PASS: success check/completion timing/source document/failure/expiry/edges/rapid saves/hidden pages; quiet downloads/off/concurrency/failure/recovery; hover capture; preview lifecycle; love removed.');
+  console.log('PASS: success check/lazy recovery/focus loss/completion timing/source document/failure/expiry/edges/rapid saves/hidden pages; quiet downloads/off/concurrency/failure/recovery; hover capture; preview lifecycle; love removed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

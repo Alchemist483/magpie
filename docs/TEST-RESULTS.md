@@ -1,5 +1,13 @@
 # Verification — 2026-10-22
 
+## Version 1.2.2: more reliable cursor confirmation
+
+The user reported no cursor check in Brave despite refreshing and having the correct 1.2.1 files and permissions. A fresh isolated Brave profile passed the original code, so the exact cause in the user's profile is not confirmed. Two fragile paths were reproduced: an old hover helper prevented feedback installation, and a blur event immediately removed the check.
+
+The worker now invokes the helper directly in the original document, installs it if absent and retries. This removes the page-message-listener dependency. Brief focus loss no longer removes successful feedback; tab hiding, navigation and expiry still do. The original 24-pixel design and 1.2-second duration are unchanged.
+
+`node tests/check.cjs` passes with regressions for on-demand installation despite an old helper, source-document targeting, disappeared-document handling and focus-loss survival. An isolated run using the installed **Brave 1.97.59 / Chromium 155.0.8059.85** executable produced eight images and eight sidecars, with successful cursor checks after normal and right-click save functions. It verified recovery after removing the feedback helper while leaving the hover helper, focus-loss survival, expiry, pointer transparency, viewport edges and no success check on failure. Normal-use console errors: zero. Native shortcut dispatch and confirmation in the user's live profile remain manual checks.
+
 ## Version 1.2.1: cursor save confirmation
 
 `node tests/check.cjs` passes. Added checks verify a single success message after the image and sidecar finish, no message while a sidecar is pending or after it fails, source-document targeting, trusted messages, hidden-page suppression, a 1.2-second lifetime, viewport-edge placement, pointer movement, rapid-save replacement and cleanup before snipping or leaving a page.

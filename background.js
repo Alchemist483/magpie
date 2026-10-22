@@ -211,10 +211,23 @@ function fail(error, tabId) {
   badge(false, tabId);
 }
 
-function saved(job) {
+async function saved(job) {
   badge(true, job.tabId);
   if (!Number.isInteger(job.tabId) || !job.documentId) return;
-  chrome.tabs.sendMessage(job.tabId, { type: "taste:saved" }, { documentId: job.documentId }).catch(() => {});
+  const target = { tabId: job.tabId, documentIds: [job.documentId] };
+  const show = () => {
+    if (!globalThis.tasteShowSaved) return false;
+    globalThis.tasteShowSaved();
+    return true;
+  };
+  try {
+    const [result] = await chrome.scripting.executeScript({ target, func: show });
+    if (!result?.result) {
+      // Existing tabs may lack the current content script after an extension update.
+      await chrome.scripting.executeScript({ target, files: ["hover.js"] });
+      await chrome.scripting.executeScript({ target, func: show });
+    }
+  } catch {} // A closed/navigated/restricted page must not turn a completed download into failure.
 }
 
 function folderName(value) {
@@ -386,7 +399,8 @@ function cropBounds(rect, viewport, width, height) {
 
 async function captureSnip(message, tab, session) {
   cropBounds(message.rect, message.viewport, message.viewport?.w, message.viewport?.h);
-  await chrome.tabs.sendMessage(tab.id, { type: "taste:hide-saved" }).catch(() => {});
+  await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true },
+    func: () => globalThis.tasteHideSaved?.() }).catch(() => {});
   if (!await isSnipActive(tab, session)) return null;
   const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
   if (!await isSnipActive(tab, session)) return null;
@@ -467,7 +481,7 @@ function finishDownload(id) {
         await download(json, `${job.folder}/meta/${expectedFile}`, {
           tabId: job.tabId, documentId: job.documentId, expectedFile
         });
-      } else saved(job);
+      } else await saved(job);
       await chrome.storage.session.remove(key);
       await updateDownloadUi(() => restoreDownloadUi());
     } catch (error) {

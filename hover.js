@@ -1,5 +1,5 @@
 (() => {
-  if (globalThis.tasteHoveredImage) return;
+  if (globalThis.tasteShowSaved) return;
   let point = null, lastPoint, check, checkTimer;
   const track = event => {
     if (event.isTrusted) {
@@ -12,7 +12,7 @@
   window.addEventListener("pointerout", event => {
     if (event.isTrusted) point = event.relatedTarget ? { x: event.clientX, y: event.clientY } : null;
   }, { capture: true, passive: true });
-  window.addEventListener("blur", () => { point = null; hideCheck(); });
+  window.addEventListener("blur", () => { point = null; });
   document.addEventListener("visibilitychange", () => { if (document.hidden) { point = null; hideCheck(); } });
   window.addEventListener("pagehide", hideCheck);
 
@@ -30,10 +30,8 @@
     check.style.setProperty("top", `${place(y, innerHeight)}px`, "important");
   }
 
-  chrome.runtime.onMessage.addListener((message, sender) => {
-    if (sender.id !== chrome.runtime.id) return;
-    if (message?.type === "taste:hide-saved" || message?.type === "taste:start-snip") hideCheck();
-    if (message?.type !== "taste:saved" || document.hidden) return;
+  function showCheck() {
+    if (document.hidden) return;
     hideCheck();
     check = document.createElement("div");
     check.setAttribute("popover", "manual");
@@ -47,7 +45,9 @@
     positionCheck();
     check.showPopover();
     checkTimer = setTimeout(hideCheck, 1200);
-  });
+  }
+  globalThis.tasteShowSaved = showCheck;
+  globalThis.tasteHideSaved = hideCheck;
 
   function imageAt(root, visited = new Set()) {
     if (visited.has(root)) return null;

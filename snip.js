@@ -15,6 +15,7 @@
   });
 
   function showSnip(token) {
+    globalThis.tasteHideSaved?.();
     currentToken = token;
     const previousFocus = document.activeElement;
     const controller = new AbortController();
