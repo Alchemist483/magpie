@@ -1,5 +1,13 @@
 # Verification — 2026-10-22
 
+## Version 1.2.1: cursor save confirmation
+
+`node tests/check.cjs` passes. Added checks verify a single success message after the image and sidecar finish, no message while a sidecar is pending or after it fails, source-document targeting, trusted messages, hidden-page suppression, a 1.2-second lifetime, viewport-edge placement, pointer movement, rapid-save replacement and cleanup before snipping or leaving a page.
+
+Chrome for Testing **151.0.7922.34** integration produced **eight images and eight matching sidecars** with the new check. Verified a 24 CSS-pixel closed-shadow top-layer popover, pointer events disabled, no focus stealing, automatic expiry and no success check on an intentional failure. Desktop (1000 × 700) and narrow-window (400 × 700) screenshots show the check beside the pointer position and staying inside viewport edges. Normal use had zero console errors. The existing preview browser run also passed, producing five snips and five sidecars with correct crop pixels, confirmation/discard controls, lifecycle cleanup and worker-restart recovery.
+
+Native keyboard-command dispatch, native context-menu selection and assistive-technology announcements remain manual checks. Browser automation invokes the same save functions after real page pointer movement; it does not dispatch extension accelerators.
+
 ## Version 1.2.0: hover capture, quiet downloads, simpler saving
 
 `node tests/check.cjs` passes. New checks cover hover capture, exact hovered metadata for duplicate URLs, frame-specific blob retrieval, missing/ambiguous image rejection, transparent overlays, open shadow roots and cycle protection, trusted pointer coordinates and frame transitions. Quiet-download checks cover the default, disabling the option, overlapping saves, image/sidecar completion, download-start failure, interrupted downloads and worker recovery of an orphaned UI flag. Tests verify love is absent from the commands, image menu, filenames and new 12-field metadata, even if a legacy confirm message includes it. Capture and preview lifecycle checks still pass.

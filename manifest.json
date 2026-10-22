@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Magpie",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Save beautiful images and area snips straight to your taste library.",
   "minimum_chrome_version": "120",
   "permissions": ["contextMenus", "downloads", "downloads.ui", "activeTab", "scripting", "storage"],

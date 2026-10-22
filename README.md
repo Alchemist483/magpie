@@ -12,6 +12,8 @@ The name is a nod to Eagle, the paid image organiser it replaces. A magpie is th
 
 In the preview, **Enter** saves and **Esc** discards. The preview has just two buttons: **Save** and **Discard**.
 
+A tiny green check appears beside your pointer after the image and its notes file finish saving. It follows your pointer for about a second, then disappears without getting in the way of clicks. The toolbar icon also shows a green check; a red exclamation mark means a save failed.
+
 Previews disappear without saving after 60 seconds, when you leave the page or switch tabs, or when you start another snip. Image right-click saves still happen immediately. For very large snips, Magpie saves directly to avoid filling its temporary storage.
 
 To return to immediate snip saving, open Magpie's **Options** and turn off **Preview snips before saving**. Preview is on by default.
@@ -27,7 +29,7 @@ Magpie hides Chrome's download bubble while saving, so it doesn't pop open after
 
 Change either shortcut at `chrome://extensions/shortcuts` (or `brave://extensions/shortcuts`). If a shortcut does nothing, it may already be taken. On macOS, Chrome uses Command in place of Ctrl. Avoid Alt+Shift combos on Windows, which uses Alt+Shift to switch keyboard language.
 
-After updating, reload Magpie at `chrome://extensions` and refresh your open image pages once so hover capture works through page overlays and frames. Hover saving works with image elements; use a snip for backgrounds, canvases or other artwork that isn't an image element.
+After updating, reload Magpie at `chrome://extensions` and refresh your open image pages once to load the cursor check and hover capture through page overlays and frames. Hover saving works with image elements; use a snip for backgrounds, canvases or other artwork that isn't an image element.
 
 ## Where files go
 

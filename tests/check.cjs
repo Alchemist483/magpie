@@ -13,6 +13,7 @@ const errors = [];
 const badges = [];
 const uiChanges = [];
 const menus = [];
+const savedMessages = [];
 let renameNextSidecar = false;
 let now = Date.now();
 let timerId = 0;
@@ -32,7 +33,10 @@ const chrome = {
   tabs: {
     onActivated: listener('activated'), onUpdated: listener('updated'), onRemoved: listener('removed'),
     query: async () => [activeTab],
-    sendMessage: async () => ({ ok: true }),
+    sendMessage: async (tabId, message, target) => {
+      if (message.type === 'taste:saved') savedMessages.push({ tabId, target });
+      return { ok: true };
+    },
     captureVisibleTab: async () => `data:image/png;base64,${cropBytes.toString('base64')}`
   },
   scripting: { executeScript: async () => [{ documentId: 'doc-7' }] },
@@ -81,7 +85,7 @@ const call = (name, ...args) => context[name](...args);
   await call('snipState', async () => {});
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '1.2.0');
+  assert.equal(manifest.version, '1.2.1');
   assert.equal(manifest.commands['snip-area'].suggested_key.default, 'Ctrl+Shift+Y');
   assert.equal(manifest.commands['save-hovered'].suggested_key.default, 'Ctrl+Shift+E');
   assert.deepEqual(Object.keys(manifest.commands).sort(), ['save-hovered', 'snip-area']);
@@ -117,7 +121,7 @@ const call = (name, ...args) => context[name](...args);
   const crop = call('cropBounds', rect, { w: 800, h: 600, dpr: 2 }, 1600, 1200);
   assert.deepEqual(JSON.parse(JSON.stringify(crop)), { x: 20, y: 40, w: 200, h: 160 });
   assert.throws(() => call('cropBounds', { ...rect, x: -1 }, { w: 800, h: 600, dpr: 1 }, 800, 600));
-  await call('download', 'data:image/webp;base64,AA==', 'Taste/test.webp', { folder: 'Taste', meta: result.meta, tabId: 7 });
+  await call('download', 'data:image/webp;base64,AA==', 'Taste/test.webp', { folder: 'Taste', meta: result.meta, tabId: 7, frameId: 4, documentId: 'source-document' });
   assert.equal(downloads.length, 2);
   for (const { options } of downloads) {
     assert.equal(options.saveAs, false);
@@ -125,6 +129,7 @@ const call = (name, ...args) => context[name](...args);
   }
   assert.equal(downloads[1].options.filename, 'Taste/meta/test (1).json');
   assert.equal(JSON.parse(decodeURIComponent(downloads[1].options.url.split(',')[1])).file, 'test (1).webp');
+  assert.deepEqual(JSON.parse(JSON.stringify(savedMessages)), [{ tabId: 7, target: { documentId: 'source-document' } }], 'one confirmation after the sidecar finishes, addressed to the source document');
   assert.equal(Object.keys(session).length, 0);
   assert.ok(uiChanges.some(change => change.enabled === false));
   assert.equal(uiChanges.at(-1).enabled, true);
@@ -156,6 +161,18 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(uiChanges.at(-1).enabled, true);
   assert.equal(Object.keys(session).length, 0);
   chrome.downloads.download = originalDownload;
+  chrome.downloads.download = async options => {
+    const id = await originalDownload(options);
+    if (options.filename.endsWith('.json')) downloads.at(-1).state = 'in_progress';
+    return id;
+  };
+  const beforeSidecar = savedMessages.length;
+  await call('download', 'data:image/png;base64,AA==', 'Taste/slow-sidecar.png', { folder: 'Taste', meta: result.meta, tabId: 7, documentId: 'frame-four' });
+  assert.equal(savedMessages.length, beforeSidecar, 'no success while metadata is still downloading');
+  downloads.at(-1).state = 'complete'; await call('finishDownload', downloads.at(-1).id);
+  assert.equal(savedMessages.length, beforeSidecar + 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedMessages.at(-1).target)), { documentId: 'frame-four' });
+  chrome.downloads.download = originalDownload;
   assert.ok(badges.includes('✓'));
   await Promise.all([
     call('saveCapture', 'data:image/png;base64,AA==', 'Taste/collision.png', { folder: 'Taste', meta: result.meta, tabId: 7 }),
@@ -166,10 +183,12 @@ const call = (name, ...args) => context[name](...args);
   assert.ok(downloads.some(item => item.options.filename === 'Taste/meta/collision (1).json'));
   renameNextSidecar = true;
   const badgeCount = badges.length;
+  const beforeFailedSidecar = savedMessages.length;
   await call('download', 'data:image/png;base64,AA==', 'Taste/orphan.png', { folder: 'Taste', meta: result.meta, tabId: 7 });
   assert.equal(errors.length, 1);
   assert.match(errors[0].join(' '), /Metadata filename collision/);
   assert.deepEqual(badges.slice(badgeCount), ['!']);
+  assert.equal(savedMessages.length, beforeFailedSidecar, 'failed sidecar never shows a success check');
   // Completing before the session record exists must still be processed later.
   const failedId = downloads.length + 1;
   await call('finishDownload', failedId);
@@ -182,15 +201,28 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(Object.keys(session).length, 0);
   assert.equal(uiChanges.at(-1).enabled, true, 'interrupted saves restore UI');
   const hoverEvents = {};
+  const checkNodes = [], checkTimers = new Map();
+  let hoverMessage, checkTimerId = 0;
   const image = { localName: 'img' };
   let inside = true, hits = [image], lastPoint;
   const doc = {
-    hidden: false, documentElement: { matches: () => inside },
+    hidden: false, documentElement: { matches: () => inside, append: node => checkNodes.push(node) },
+    createElement: () => ({
+      style: { setProperty(name, value) { this[name] = value; } }, attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      attachShadow(options) { this.shadowMode = options.mode; return {}; },
+      showPopover() { this.open = true; },
+      remove() { const index = checkNodes.indexOf(this); if (index >= 0) checkNodes.splice(index, 1); }
+    }),
     elementsFromPoint: (x, y) => { lastPoint = [x, y]; return hits; },
     querySelectorAll: () => hits,
     addEventListener: (name, callback) => { hoverEvents[name] = callback; }
   };
-  const hoverContext = vm.createContext({ document: doc, window: { addEventListener: (name, callback) => { hoverEvents[name] = callback; } } });
+  const hoverContext = vm.createContext({ document: doc, innerWidth: 800, innerHeight: 600,
+    chrome: { runtime: { id: 'test', onMessage: { addListener: fn => { hoverMessage = fn; } } } },
+    setTimeout: (callback, delay) => { checkTimers.set(++checkTimerId, { callback, delay }); return checkTimerId; },
+    clearTimeout: id => checkTimers.delete(id),
+    window: { addEventListener: (name, callback) => { hoverEvents[name] = callback; } } });
   vm.runInContext(fs.readFileSync(path.join(root, 'hover.js'), 'utf8'), hoverContext);
   assert.equal(hoverContext.tasteHoveredImage(), image);
   hoverEvents.pointermove({ isTrusted: true, clientX: 50, clientY: 60 });
@@ -213,6 +245,36 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(hoverContext.tasteHoveredImage(), null);
   inside = true; doc.hidden = true;
   assert.equal(hoverContext.tasteHoveredImage(), null);
+  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  assert.equal(checkNodes.length, 0, 'hidden pages never show success');
+  doc.hidden = false;
+  hoverMessage({ type: 'taste:saved' }, { id: 'page' });
+  assert.equal(checkNodes.length, 0, 'only extension messages can show success');
+  hoverEvents.pointermove({ isTrusted: true, clientX: 100, clientY: 120 });
+  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  assert.equal(checkNodes.length, 1);
+  assert.equal(checkNodes[0].shadowMode, 'closed');
+  assert.equal(checkNodes[0].attributes.role, 'status');
+  assert.equal(checkNodes[0].attributes['aria-label'], 'Saved to Magpie');
+  assert.equal(checkNodes[0].style.left, '114px');
+  assert.equal(checkNodes[0].style.top, '134px');
+  assert.match(checkNodes[0].style.cssText, /pointer-events:none/);
+  hoverEvents.pointermove({ isTrusted: true, clientX: 798, clientY: 599 });
+  assert.equal(checkNodes[0].style.left, '760px');
+  assert.equal(checkNodes[0].style.top, '561px');
+  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  assert.equal(checkNodes.length, 1, 'rapid saves reuse one check');
+  assert.equal(checkTimers.size, 1);
+  const timer = [...checkTimers.values()][0];
+  assert.equal(timer.delay, 1200);
+  timer.callback();
+  assert.equal(checkNodes.length, 0, 'confirmation expires');
+  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  hoverMessage({ type: 'taste:hide-saved' }, { id: 'test' });
+  assert.equal(checkNodes.length, 0, 'snip capture can clear confirmation');
+  hoverMessage({ type: 'taste:saved' }, { id: 'test' });
+  doc.hidden = true; hoverEvents.visibilitychange();
+  assert.equal(checkNodes.length, 0, 'leaving the tab removes confirmation');
 
   const pngUrl = `data:image/png;base64,${cropBytes.toString('base64')}`;
   let frames = [{ frameId: 0, result: null }, { frameId: 4, result: { srcUrl: pngUrl, details: { alt: 'Hovered image', width: 16, height: 16 } } }];
@@ -387,5 +449,5 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(session.downloadUiHidden, undefined, 'worker startup releases orphan UI suppression');
   assert.equal(uiChanges.at(-1).enabled, true);
   assert.equal(errors.length, 2, 'stale/expired/discard messages stay quiet');
-  console.log('PASS: quiet downloads/off/concurrency/start failure/interruption/worker recovery; hover capture/overlays/frames/shadow/trusted coordinates; preview confirm/discard/timeout/stale token/double confirm/lifecycle/off/budget/worker restart; love removed from commands, filenames and metadata.');
+  console.log('PASS: success check/completion timing/source document/failure/expiry/edges/rapid saves/hidden pages; quiet downloads/off/concurrency/failure/recovery; hover capture; preview lifecycle; love removed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -48,8 +48,8 @@ async function saveHoveredImage(tab) {
   });
   const hovered = frames.filter(frame => frame.result?.srcUrl);
   if (hovered.length !== 1) throw new Error("Move your pointer over one image, then press the save shortcut.");
-  const { frameId, result } = hovered[0];
-  await saveImage({ srcUrl: result.srcUrl, frameId }, tab, result.details);
+  const { frameId, documentId, result } = hovered[0];
+  await saveImage({ srcUrl: result.srcUrl, frameId, documentId }, tab, result.details);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -211,6 +211,12 @@ function fail(error, tabId) {
   badge(false, tabId);
 }
 
+function saved(job) {
+  badge(true, job.tabId);
+  if (!Number.isInteger(job.tabId) || !job.documentId) return;
+  chrome.tabs.sendMessage(job.tabId, { type: "taste:saved" }, { documentId: job.documentId }).catch(() => {});
+}
+
 function folderName(value) {
   const folder = typeof value === "string" ? value.trim() : "";
   if (!folder || folder.length > 80 || /[<>:"/\\|?*\x00-\x1f]/.test(folder) ||
@@ -288,7 +294,7 @@ async function imageDetails(tabId, frameId, url, readBlob) {
     args: [url, readBlob]
   });
   if (!injection?.result) throw new Error("Could not read this image in its page.");
-  return injection.result;
+  return { ...injection.result, documentId: injection.documentId };
 }
 
 async function saveImage(info, tab, hoveredDetails) {
@@ -331,7 +337,8 @@ async function saveImage(info, tab, hoveredDetails) {
   }
   const result = metadata("image", tab, url, details, null, date);
   await saveCapture(downloadUrl, `${folder}/${result.base}.${extension}`, {
-    tabId: tab.id, folder, meta: settings.metadata ? result.meta : null
+    tabId: tab.id, documentId: info.documentId || details.documentId,
+    folder, meta: settings.metadata ? result.meta : null
   });
 }
 
@@ -379,6 +386,7 @@ function cropBounds(rect, viewport, width, height) {
 
 async function captureSnip(message, tab, session) {
   cropBounds(message.rect, message.viewport, message.viewport?.w, message.viewport?.h);
+  await chrome.tabs.sendMessage(tab.id, { type: "taste:hide-saved" }).catch(() => {});
   if (!await isSnipActive(tab, session)) return null;
   const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
   if (!await isSnipActive(tab, session)) return null;
@@ -399,7 +407,8 @@ async function writeSnip(crop, tab, session) {
   const folder = folderName(settings.folder);
   const result = metadata("snip", session, null, { width: crop.width, height: crop.height }, crop.rect);
   await saveCapture(crop.dataUrl, `${folder}/${result.base}.png`, {
-    tabId: tab.id, folder, meta: settings.metadata ? result.meta : null
+    tabId: tab.id, documentId: session.documentId,
+    folder, meta: settings.metadata ? result.meta : null
   });
 }
 
@@ -455,8 +464,10 @@ function finishDownload(id) {
         const meta = { ...job.meta, file };
         const json = `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(meta, null, 2))}`;
         const expectedFile = `${file.replace(/\.[^.]+$/, "")}.json`;
-        await download(json, `${job.folder}/meta/${expectedFile}`, { tabId: job.tabId, expectedFile });
-      } else badge(true, job.tabId);
+        await download(json, `${job.folder}/meta/${expectedFile}`, {
+          tabId: job.tabId, documentId: job.documentId, expectedFile
+        });
+      } else saved(job);
       await chrome.storage.session.remove(key);
       await updateDownloadUi(() => restoreDownloadUi());
     } catch (error) {
