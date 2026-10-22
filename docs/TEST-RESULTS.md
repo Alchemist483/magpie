@@ -1,4 +1,18 @@
-# Verification — 2026-10-21
+# Verification — 2026-10-22
+
+## Version 1.2.0: hover capture, quiet downloads, simpler saving
+
+`node tests/check.cjs` passes. New checks cover hover capture, exact hovered metadata for duplicate URLs, frame-specific blob retrieval, missing/ambiguous image rejection, transparent overlays, open shadow roots and cycle protection, trusted pointer coordinates and frame transitions. Quiet-download checks cover the default, disabling the option, overlapping saves, image/sidecar completion, download-start failure, interrupted downloads and worker recovery of an orphaned UI flag. Tests verify love is absent from the commands, image menu, filenames and new 12-field metadata, even if a legacy confirm message includes it. Capture and preview lifecycle checks still pass.
+
+An isolated Chrome for Testing **151.0.7922.34** run loaded the full extension and registered both commands (Ctrl+Shift+E, Ctrl+Shift+Y), with no love command. Real pointer movement plus the worker's hover-save function produced **seven PNGs and seven matching JSON sidecars**, with no love field or filename suffix. Duplicate-source alt text, data URLs, a page-owned blob, a transparent overlay and an open shadow root worked without preview UI or normal-use console errors. Empty-space capture produced the expected red badge and no file.
+
+The run exercised Chrome's actual `downloads.setUiOptions` implementation: disable before download, release after all jobs complete, and no UI changes with the setting off. The options page also loaded with quiet downloads on by default and persisted the toggle. File-location prompting was off, with normal browser download handling. A live visual check of the browser's top-right bubble remains manual.
+
+A separate browser run checked the simplified snip preview at native 2× scale: only Save and Discard, Save initially focused even with Shift held on release, Tab / Shift+Tab cycling, L doing nothing, Enter / Shift+Enter saving ordinary snips, and both buttons working. Five saved snips had matching sidecars without love fields or suffixes. Exact crop pixels, unchanged page layout, synthetic-key rejection, discard/tab/navigation/replacement cleanup, a real worker restart before confirmation, preview off and the accelerated 60-second timeout passed with zero console errors.
+
+Native keyboard-command dispatch remains a manual check: DevTools keyboard simulation did not invoke browser extension accelerators, so the harness called the command's worker function directly. Cross-origin/srcdoc frame pointer routing is also manual because the automation failed to deliver hover into those frames; the frame-selection and frame-owned blob branches pass unit checks. No claim of end-to-end native shortcut or cross-frame pointer verification is made.
+
+The sections below record earlier version checks.
 
 ## Version 1.1.0: snip preview
 
@@ -46,7 +60,7 @@ The browser harness invoked image-save functions and snip startup directly in th
 
 With Chrome's **“Ask where to save each file before downloading” enabled**, a normal browser process left the download awaiting a location prompt despite `saveAs: false`. This requirement is **unfulfilled** under the specified APIs and permissions. Turning the browser preference off made the tested downloads dialog-free. Magpie does not change this global preference.
 
-Optional `downloads.ui` bubble suppression was intentionally skipped; the download bubble may appear.
+In version 1.0, optional `downloads.ui` bubble suppression was skipped. Version 1.2.0 implements it as described above.
 
 ## Fresh adversarial subagent review
 

@@ -11,6 +11,8 @@ const session = {};
 const downloads = [];
 const errors = [];
 const badges = [];
+const uiChanges = [];
+const menus = [];
 let renameNextSidecar = false;
 let now = Date.now();
 let timerId = 0;
@@ -25,7 +27,7 @@ class ClockDate extends Date {
 }
 const chrome = {
   runtime: { id: 'test', onInstalled: listener('installed'), onMessage: listener('message') },
-  contextMenus: { onClicked: listener('context'), removeAll: cb => cb(), create() {} },
+  contextMenus: { onClicked: listener('context'), removeAll: cb => cb(), create(options) { menus.push(options); } },
   commands: { onCommand: listener('command') },
   tabs: {
     onActivated: listener('activated'), onUpdated: listener('updated'), onRemoved: listener('removed'),
@@ -49,6 +51,7 @@ const chrome = {
   },
   downloads: {
     onChanged: listener('changed'),
+    setUiOptions: async options => { uiChanges.push({ enabled: options.enabled, pending: Object.keys(session).filter(key => key.startsWith('download:')).length }); },
     download: async options => {
       const id = downloads.length + 1;
       let filename = options.filename.replace(/\//g, '\\').replace('test.webp', 'test (1).webp');
@@ -78,8 +81,15 @@ const call = (name, ...args) => context[name](...args);
   await call('snipState', async () => {});
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '1.1.0');
+  assert.equal(manifest.version, '1.2.0');
   assert.equal(manifest.commands['snip-area'].suggested_key.default, 'Ctrl+Shift+Y');
+  assert.equal(manifest.commands['save-hovered'].suggested_key.default, 'Ctrl+Shift+E');
+  assert.deepEqual(Object.keys(manifest.commands).sort(), ['save-hovered', 'snip-area']);
+  events.installed();
+  assert.deepEqual(menus.map(menu => menu.id), ['save', 'snip']);
+  assert.deepEqual(manifest.content_scripts[0].js, ['hover.js']);
+  assert.equal(manifest.content_scripts[0].all_frames, true);
+  assert.deepEqual(manifest.permissions, ['contextMenus', 'downloads', 'downloads.ui', 'activeTab', 'scripting', 'storage']);
   for (const size of [16, 48, 128]) {
     const png = fs.readFileSync(path.join(root, `icons/${size}.png`));
     assert.equal(png.readUInt32BE(16), size);
@@ -95,12 +105,12 @@ const call = (name, ...args) => context[name](...args);
   for (const bad of ['../outside', 'A/B', 'A\\B', 'CON', 'nul.txt', 'bad.', '', 'C:drive', '\u0001']) assert.throws(() => call('folderName', bad));
   assert.equal(call('folderName', ' Taste '), 'Taste');
   const date = new Date(2026, 9, 21, 16, 15, 2);
-  const result = call('metadata', 'image', true, { url: 'https://www.pinterest.com/pin/1', title: 'Pin' }, 'data:image/png;base64,AA==', {}, null, date);
-  assert.equal(result.base, '2026-10-21_161502_pinterest.com_love');
+  const result = call('metadata', 'image', { url: 'https://www.pinterest.com/pin/1', title: 'Pin' }, 'data:image/png;base64,AA==', {}, null, date);
+  assert.equal(result.base, '2026-10-21_161502_pinterest.com');
   assert.match(result.meta.saved_at, /^2026-10-21T16:15:02[+-]\d{2}:\d{2}$/);
   date.getTimezoneOffset = () => 330;
   assert.ok(call('localStamp', date).iso.endsWith('-05:30'));
-  assert.deepEqual(Object.keys(result.meta), ['file', 'saved_at', 'type', 'love', 'image_url', 'page_url', 'page_title', 'alt_text', 'width', 'height', 'snip_rect', 'tags', 'note']);
+  assert.deepEqual(Object.keys(result.meta), ['file', 'saved_at', 'type', 'image_url', 'page_url', 'page_title', 'alt_text', 'width', 'height', 'snip_rect', 'tags', 'note']);
   assert.equal(result.meta.alt_text, null);
   assert.equal(result.meta.width, null);
   const rect = { x: 10, y: 20, w: 100, h: 80 };
@@ -116,6 +126,36 @@ const call = (name, ...args) => context[name](...args);
   assert.equal(downloads[1].options.filename, 'Taste/meta/test (1).json');
   assert.equal(JSON.parse(decodeURIComponent(downloads[1].options.url.split(',')[1])).file, 'test (1).webp');
   assert.equal(Object.keys(session).length, 0);
+  assert.ok(uiChanges.some(change => change.enabled === false));
+  assert.equal(uiChanges.at(-1).enabled, true);
+  assert.ok(uiChanges.filter(change => change.enabled).every(change => change.pending === 0), 'UI only returns when the image and sidecar have finished');
+  preferences.quietDownloads = false;
+  const quietOff = uiChanges.length;
+  await call('download', 'data:image/png;base64,AA==', 'Taste/not-quiet.png', { tabId: 7 });
+  assert.equal(uiChanges.length, quietOff, 'quiet downloads can be disabled');
+  delete preferences.quietDownloads;
+  const originalDownload = chrome.downloads.download;
+  chrome.downloads.download = async () => { throw new Error('Download start rejected'); };
+  await assert.rejects(call('download', 'data:image/png;base64,AA==', 'Taste/rejected.png', { tabId: 7 }), /Download start rejected/);
+  assert.equal(uiChanges.at(-1).enabled, true, 'start failure restores UI');
+  assert.equal(session.downloadUiHidden, undefined);
+  chrome.downloads.download = async options => {
+    const id = await originalDownload(options);
+    downloads.at(-1).state = 'in_progress';
+    return id;
+  };
+  const concurrentStart = uiChanges.length;
+  await Promise.all([
+    call('download', 'data:image/png;base64,AA==', 'Taste/pending-a.png', { tabId: 7 }),
+    call('download', 'data:image/png;base64,AA==', 'Taste/pending-b.png', { tabId: 7 })
+  ]);
+  const pending = downloads.slice(-2);
+  pending[0].state = 'complete'; await call('finishDownload', pending[0].id);
+  assert.ok(uiChanges.slice(concurrentStart).every(change => !change.enabled), 'another pending save keeps UI hidden');
+  pending[1].state = 'complete'; await call('finishDownload', pending[1].id);
+  assert.equal(uiChanges.at(-1).enabled, true);
+  assert.equal(Object.keys(session).length, 0);
+  chrome.downloads.download = originalDownload;
   assert.ok(badges.includes('✓'));
   await Promise.all([
     call('saveCapture', 'data:image/png;base64,AA==', 'Taste/collision.png', { folder: 'Taste', meta: result.meta, tabId: 7 }),
@@ -135,10 +175,69 @@ const call = (name, ...args) => context[name](...args);
   await call('finishDownload', failedId);
   downloads.push({ id: failedId, state: 'interrupted', error: 'NETWORK_FAILED' });
   session[`download:${failedId}`] = { tabId: 7 };
+  session.downloadUiHidden = true;
   await Promise.all([call('finishDownload', failedId), call('finishDownload', failedId)]);
   assert.equal(errors.length, 2);
   assert.ok(badges.includes('!'));
   assert.equal(Object.keys(session).length, 0);
+  assert.equal(uiChanges.at(-1).enabled, true, 'interrupted saves restore UI');
+  const hoverEvents = {};
+  const image = { localName: 'img' };
+  let inside = true, hits = [image], lastPoint;
+  const doc = {
+    hidden: false, documentElement: { matches: () => inside },
+    elementsFromPoint: (x, y) => { lastPoint = [x, y]; return hits; },
+    querySelectorAll: () => hits,
+    addEventListener: (name, callback) => { hoverEvents[name] = callback; }
+  };
+  const hoverContext = vm.createContext({ document: doc, window: { addEventListener: (name, callback) => { hoverEvents[name] = callback; } } });
+  vm.runInContext(fs.readFileSync(path.join(root, 'hover.js'), 'utf8'), hoverContext);
+  assert.equal(hoverContext.tasteHoveredImage(), image);
+  hoverEvents.pointermove({ isTrusted: true, clientX: 50, clientY: 60 });
+  hits = [{ localName: 'div' }, image];
+  assert.equal(hoverContext.tasteHoveredImage(), image, 'transparent overlays do not hide images');
+  hoverEvents.pointermove({ isTrusted: false, clientX: 999, clientY: 999 });
+  hoverContext.tasteHoveredImage();
+  assert.deepEqual(lastPoint, [50, 60], 'synthetic events cannot change capture coordinates');
+  hits = [{ localName: 'iframe' }, image];
+  hoverEvents.pointerout({ isTrusted: true, relatedTarget: hits[0], clientX: 200, clientY: 250 });
+  assert.equal(hoverContext.tasteHoveredImage(), null, 'do not save an image behind a frame');
+  assert.deepEqual(lastPoint, [200, 250], 'entering a frame updates the parent hit-test location');
+  const shadow = { elementsFromPoint: () => [image] };
+  hits = [{ localName: 'sample-image', shadowRoot: shadow }];
+  assert.equal(hoverContext.tasteHoveredImage(), image);
+  shadow.elementsFromPoint = () => hits;
+  assert.equal(hoverContext.tasteHoveredImage(), null, 'shadow-root ancestor cycles terminate');
+  inside = false;
+  hoverEvents.pointerout({ isTrusted: true, relatedTarget: null });
+  assert.equal(hoverContext.tasteHoveredImage(), null);
+  inside = true; doc.hidden = true;
+  assert.equal(hoverContext.tasteHoveredImage(), null);
+
+  const pngUrl = `data:image/png;base64,${cropBytes.toString('base64')}`;
+  let frames = [{ frameId: 0, result: null }, { frameId: 4, result: { srcUrl: pngUrl, details: { alt: 'Hovered image', width: 16, height: 16 } } }];
+  const injectionCalls = [];
+  chrome.scripting.executeScript = async options => {
+    injectionCalls.push(options.target);
+    if (options.target.allFrames) return frames;
+    return [{ result: { bytes: cropBytes.toString('base64'), mime: 'image/png', alt: 'First duplicate image', width: 16, height: 16 } }];
+  };
+  let hoverBefore = downloads.length;
+  await call('saveHoveredImage', activeTab);
+  assert.equal(downloads.length, hoverBefore + 2);
+  assert.equal(JSON.parse(decodeURIComponent(downloads.at(-1).options.url.split(',')[1])).alt_text, 'Hovered image');
+  assert.equal(injectionCalls.length, 1, 'ordinary hover save only needs one page read');
+  assert.equal('love' in JSON.parse(decodeURIComponent(downloads.at(-1).options.url.split(',')[1])), false);
+  frames[1].result.srcUrl = 'blob:https://example.com/test';
+  await call('saveHoveredImage', activeTab);
+  assert.deepEqual(JSON.parse(JSON.stringify(injectionCalls.at(-1))), { tabId: 7, frameIds: [4] });
+  assert.equal(JSON.parse(decodeURIComponent(downloads.at(-1).options.url.split(',')[1])).alt_text, 'Hovered image');
+  hoverBefore = downloads.length;
+  frames = [{ frameId: 0, result: null }];
+  await assert.rejects(call('saveHoveredImage', activeTab), /Move your pointer/);
+  frames = [{ frameId: 0, result: { srcUrl: pngUrl } }, { frameId: 4, result: { srcUrl: pngUrl } }];
+  await assert.rejects(call('saveHoveredImage', activeTab), /Move your pointer/);
+  assert.equal(downloads.length, hoverBefore);
   let releaseFirst;
   const firstInjection = new Promise(resolve => { releaseFirst = resolve; });
   let injectionCount = 0;
@@ -154,19 +253,19 @@ const call = (name, ...args) => context[name](...args);
   assert.deepEqual(sent, [currentToken]);
 
   const sender = { id: 'test', tab, frameId: 0, documentId: 'doc-7' };
-  const snip = { type: 'taste:snip', rect: { x: 10, y: 20, w: 100, h: 80 }, viewport: { w: 800, h: 600, dpr: 2 }, love: false };
-  const message = (type, token, love = false) => call('handleSnipMessage', { type, token, love }, sender);
+  const snip = { type: 'taste:snip', rect: { x: 10, y: 20, w: 100, h: 80 }, viewport: { w: 800, h: 600, dpr: 2 } };
+  const message = (type, token) => call('handleSnipMessage', { type, token }, sender);
   const flush = async () => { await new Promise(setImmediate); await call('snipState', async () => {}); };
   const advance = async ms => {
     now += ms;
     for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.callback(); }
     await flush();
   };
-  const beginPreview = async (love = false) => {
+  const beginPreview = async () => {
     await call('startSnip', tab);
     const token = session['snip:7'].token;
     const before = downloads.length;
-    const response = await call('handleSnipMessage', { ...snip, token, love }, sender);
+    const response = await call('handleSnipMessage', { ...snip, token }, sender);
     assert.equal(response.ok, true);
     assert.ok(response.preview);
     assert.equal(downloads.length, before, 'release must not download');
@@ -180,22 +279,21 @@ const call = (name, ...args) => context[name](...args);
   let before = downloads.length;
   await message('taste:confirm', preview.token);
   assert.equal(downloads.length, before + 2);
-  assert.equal(latestMetadata().love, false);
+  assert.equal('love' in latestMetadata(), false);
   assert.equal(latestMetadata().type, 'snip');
   assert.equal(session[`preview:${preview.token}`], undefined);
   assert.equal(session['snip:7'], undefined);
 
-  preview = await beginPreview(true);
-  assert.equal(preview.response.preview.love, true);
+  preview = await beginPreview();
   before = downloads.length;
-  await Promise.all([message('taste:confirm', preview.token, true), message('taste:confirm', preview.token, true)]);
+  await Promise.all([message('taste:confirm', preview.token), message('taste:confirm', preview.token)]);
   assert.equal(downloads.length, before + 2, 'double confirm downloads once');
-  assert.equal(latestMetadata().love, true);
-  assert.ok(latestMetadata().file.includes('_snip_love'));
+  assert.ok(latestMetadata().file.includes('_snip'));
+  assert.equal(latestMetadata().file.includes('_love'), false);
 
-  preview = await beginPreview(true);
-  await message('taste:confirm', preview.token, false);
-  assert.equal(latestMetadata().love, false, 'plain Save overrides the Shift release preference');
+  preview = await beginPreview();
+  await call('handleSnipMessage', { type: 'taste:confirm', token: preview.token, love: true }, sender);
+  assert.equal('love' in latestMetadata(), false, 'legacy messages cannot restore the removed metadata field');
 
   preview = await beginPreview(); before = downloads.length;
   await message('taste:cancel', preview.token);
@@ -277,10 +375,17 @@ const call = (name, ...args) => context[name](...args);
   const restarted = vm.createContext({ ...context });
   vm.runInContext(fs.readFileSync(path.join(root, 'background.js'), 'utf8'), restarted);
   await restarted.snipState(async () => {});
-  await restarted.handleSnipMessage({ type: 'taste:confirm', token: preview.token, love: true }, sender);
+  await restarted.handleSnipMessage({ type: 'taste:confirm', token: preview.token }, sender);
   assert.equal(downloads.length, before + 2);
-  assert.equal(latestMetadata().love, true);
+  assert.equal('love' in latestMetadata(), false);
   assert.equal(Object.keys(session).length, 0);
+  session.downloadUiHidden = true;
+  const orphanRestart = vm.createContext({ ...context });
+  vm.runInContext(fs.readFileSync(path.join(root, 'background.js'), 'utf8'), orphanRestart);
+  await new Promise(setImmediate);
+  await orphanRestart.updateDownloadUi(async () => {});
+  assert.equal(session.downloadUiHidden, undefined, 'worker startup releases orphan UI suppression');
+  assert.equal(uiChanges.at(-1).enabled, true);
   assert.equal(errors.length, 2, 'stale/expired/discard messages stay quiet');
-  console.log('PASS: existing capture checks; preview release/confirm/love/discard/timeout/stale token/double confirm/document/tab/navigation/off/budget/worker restart.');
+  console.log('PASS: quiet downloads/off/concurrency/start failure/interruption/worker recovery; hover capture/overlays/frames/shadow/trusted coordinates; preview confirm/discard/timeout/stale token/double confirm/lifecycle/off/budget/worker restart; love removed from commands, filenames and metadata.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

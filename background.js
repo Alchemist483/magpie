@@ -1,4 +1,4 @@
-const DEFAULTS = { folder: "Taste", metadata: true, previewSnips: true };
+const DEFAULTS = { folder: "Taste", metadata: true, previewSnips: true, quietDownloads: true };
 const PREVIEW_TTL = 60_000;
 const PREVIEW_BUDGET = 8 * 1024 * 1024;
 const MIME_TYPES = {
@@ -9,13 +9,13 @@ const badgeTimers = new Map();
 const finishing = new Map();
 let captureQueue = Promise.resolve();
 let snipQueue = Promise.resolve();
+let downloadUiQueue = Promise.resolve();
 const previewTimers = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     for (const [id, title, contexts] of [
       ["save", "Save to Magpie", ["image"]],
-      ["love", "Save to Magpie ♥ (love it)", ["image"]],
       ["snip", "Snip area to Magpie", ["page", "image"]]
     ]) chrome.contextMenus.create({ id, title, contexts });
   });
@@ -27,12 +27,30 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.commands.onCommand.addListener((command, tab) => {
-  if (command !== "snip-area") return;
+  if (!["snip-area", "save-hovered"].includes(command)) return;
   (async () => {
     tab ||= (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
-    await startSnip(tab);
+    if (command === "snip-area") await startSnip(tab);
+    else await saveHoveredImage(tab);
   })().catch(error => fail(error, tab?.id));
 });
+
+async function saveHoveredImage(tab) {
+  if (!Number.isInteger(tab?.id)) throw new Error("No image tab is available.");
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    func: () => {
+      const image = globalThis.tasteHoveredImage ? globalThis.tasteHoveredImage() : document.querySelector("img:hover");
+      if (!image) return null;
+      return { srcUrl: image.currentSrc || image.src, details: { alt: image.getAttribute("alt") || null,
+        width: image.naturalWidth || null, height: image.naturalHeight || null } };
+    }
+  });
+  const hovered = frames.filter(frame => frame.result?.srcUrl);
+  if (hovered.length !== 1) throw new Error("Move your pointer over one image, then press the save shortcut.");
+  const { frameId, result } = hovered[0];
+  await saveImage({ srcUrl: result.srcUrl, frameId }, tab, result.details);
+}
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 ||
@@ -64,7 +82,22 @@ chrome.storage.session.get(null).then(items => {
   for (const key of Object.keys(items)) {
     if (key.startsWith("download:")) finishDownload(Number(key.slice(9))).catch(error => fail(error));
   }
+  updateDownloadUi(() => restoreDownloadUi()).catch(error => fail(error));
 }).catch(error => fail(error));
+
+function updateDownloadUi(task) {
+  const next = downloadUiQueue.then(task);
+  downloadUiQueue = next.catch(() => {});
+  return next;
+}
+
+async function restoreDownloadUi() {
+  const jobs = await chrome.storage.session.get(null);
+  if (!jobs.downloadUiHidden || Object.keys(jobs).some(key => key.startsWith("download:"))) return;
+  // Releasing our request must not fight another extension that still hides the UI.
+  await chrome.downloads.setUiOptions({ enabled: true }).catch(() => {});
+  await chrome.storage.session.remove("downloadUiHidden");
+}
 snipState(async () => {
   const items = await chrome.storage.session.get(null);
   for (const [key, session] of Object.entries(items)) {
@@ -135,7 +168,7 @@ async function handleSnipMessage(message, sender) {
   });
   if (!claimed) return { ok: false };
   if (claimed.pending) {
-    await writeSnip(claimed.pending, tab, claimed.session, Boolean(message.love));
+    await writeSnip(claimed.pending, tab, claimed.session);
     return { ok: true };
   }
   const crop = await captureSnip(message, tab, claimed.session);
@@ -158,7 +191,7 @@ async function handleSnipMessage(message, sender) {
     return { preview: { ...crop, token: session.token, expiresAt: session.expiresAt } };
   });
   if (!outcome) return { ok: false };
-  if (outcome.direct) await writeSnip(crop, tab, claimed.session, crop.love);
+  if (outcome.direct) await writeSnip(crop, tab, claimed.session);
   return { ok: true, ...(outcome.preview ? { preview: outcome.preview } : {}) };
 }
 
@@ -198,15 +231,15 @@ function localStamp(date = new Date()) {
   };
 }
 
-function metadata(type, love, page, imageUrl, details = {}, rect = null, date = new Date()) {
+function metadata(type, page, imageUrl, details = {}, rect = null, date = new Date()) {
   const stamp = localStamp(date);
   let site = "unknown-site";
   try { site = new URL(page.url).hostname.replace(/^www\./, "") || site; } catch {}
   site = site.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
   return {
-    base: `${stamp.name}_${site}${type === "snip" ? "_snip" : ""}${love ? "_love" : ""}`,
+    base: `${stamp.name}_${site}${type === "snip" ? "_snip" : ""}`,
     meta: {
-      file: "", saved_at: stamp.iso, type, love: Boolean(love), image_url: imageUrl,
+      file: "", saved_at: stamp.iso, type, image_url: imageUrl,
       page_url: page.url || "", page_title: page.title || "", alt_text: details.alt ?? null,
       width: details.width || null, height: details.height || null, snip_rect: rect,
       tags: [], note: ""
@@ -258,7 +291,7 @@ async function imageDetails(tabId, frameId, url, readBlob) {
   return injection.result;
 }
 
-async function saveImage(info, tab) {
+async function saveImage(info, tab, hoveredDetails) {
   if (!Number.isInteger(tab?.id)) throw new Error("No image tab is available.");
   const url = info.srcUrl || "";
   if (!/^(https?:|data:|blob:)/i.test(url)) throw new Error("This image URL is not supported.");
@@ -266,8 +299,8 @@ async function saveImage(info, tab) {
   const settings = await chrome.storage.local.get(DEFAULTS);
   const folder = folderName(settings.folder);
   const isBlob = url.startsWith("blob:");
-  let details = {};
-  try { details = await imageDetails(tab.id, info.frameId ?? 0, url, isBlob); }
+  let details = hoveredDetails || {};
+  try { if (isBlob || !hoveredDetails) details = { ...await imageDetails(tab.id, info.frameId ?? 0, url, isBlob), ...hoveredDetails }; }
   catch (error) { if (isBlob) throw error; }
   let downloadUrl, extension;
   try {
@@ -296,7 +329,7 @@ async function saveImage(info, tab) {
     downloadUrl = url;
     extension = "jpg";
   }
-  const result = metadata("image", info.menuItemId === "love", tab, url, details, null, date);
+  const result = metadata("image", tab, url, details, null, date);
   await saveCapture(downloadUrl, `${folder}/${result.base}.${extension}`, {
     tabId: tab.id, folder, meta: settings.metadata ? result.meta : null
   });
@@ -358,13 +391,13 @@ async function captureSnip(message, tab, session) {
     blob = await canvas.convertToBlob({ type: "image/png" });
   } finally { bitmap.close(); }
   return { dataUrl: dataUrl(new Uint8Array(await blob.arrayBuffer()), "image/png"), width: crop.w, height: crop.h,
-    rect: message.rect, love: Boolean(message.love) };
+    rect: message.rect };
 }
 
-async function writeSnip(crop, tab, session, love) {
+async function writeSnip(crop, tab, session) {
   const settings = await chrome.storage.local.get(DEFAULTS);
   const folder = folderName(settings.folder);
-  const result = metadata("snip", love, session, null, { width: crop.width, height: crop.height }, crop.rect);
+  const result = metadata("snip", session, null, { width: crop.width, height: crop.height }, crop.rect);
   await saveCapture(crop.dataUrl, `${folder}/${result.base}.png`, {
     tabId: tab.id, folder, meta: settings.metadata ? result.meta : null
   });
@@ -389,8 +422,18 @@ function saveCapture(url, filename, job) {
 }
 
 async function download(url, filename, job) {
-  const id = await chrome.downloads.download({ url, filename, saveAs: false, conflictAction: "uniquify" });
-  await chrome.storage.session.set({ [`download:${id}`]: job });
+  const id = await updateDownloadUi(async () => {
+    try {
+      const { quietDownloads } = await chrome.storage.local.get(DEFAULTS);
+      if (quietDownloads) {
+        await chrome.storage.session.set({ downloadUiHidden: true });
+        await chrome.downloads.setUiOptions({ enabled: false });
+      }
+      const id = await chrome.downloads.download({ url, filename, saveAs: false, conflictAction: "uniquify" });
+      await chrome.storage.session.set({ [`download:${id}`]: job });
+      return id;
+    } catch (error) { await restoreDownloadUi(); throw error; }
+  });
   // Covers a tiny download completing before its job was stored.
   await finishDownload(id);
 }
@@ -415,8 +458,10 @@ function finishDownload(id) {
         await download(json, `${job.folder}/meta/${expectedFile}`, { tabId: job.tabId, expectedFile });
       } else badge(true, job.tabId);
       await chrome.storage.session.remove(key);
+      await updateDownloadUi(() => restoreDownloadUi());
     } catch (error) {
       await chrome.storage.session.remove(key);
+      await updateDownloadUi(() => restoreDownloadUi());
       fail(error, job.tabId);
     }
   });

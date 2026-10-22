@@ -1,14 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Magpie",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Save beautiful images and area snips straight to your taste library.",
   "minimum_chrome_version": "120",
-  "permissions": ["contextMenus", "downloads", "activeTab", "scripting", "storage"],
+  "permissions": ["contextMenus", "downloads", "downloads.ui", "activeTab", "scripting", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["hover.js"],
+    "all_frames": true,
+    "match_about_blank": true,
+    "match_origin_as_fallback": true,
+    "run_at": "document_idle"
+  }],
   "action": {
-    "default_title": "Magpie — right-click an image or press Ctrl+Shift+Y",
+    "default_title": "Magpie — hover an image and press Ctrl+Shift+E",
     "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
   },
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
@@ -17,6 +25,10 @@
     "snip-area": {
       "suggested_key": { "default": "Ctrl+Shift+Y" },
       "description": "Snip an area to Magpie"
+    },
+    "save-hovered": {
+      "suggested_key": { "default": "Ctrl+Shift+E" },
+      "description": "Save the hovered image to Magpie"
     }
   }
 }

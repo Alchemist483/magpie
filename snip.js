@@ -53,13 +53,13 @@
       event.stopImmediatePropagation();
       if (event.key === "Escape") { event.preventDefault(); finish(); }
       else if (mode === "preview") {
-        if (event.key === "Enter" || event.key.toLowerCase() === "l") {
+        if (event.key === "Enter") {
           event.preventDefault();
-          confirm(event.shiftKey || event.key.toLowerCase() === "l");
+          confirm();
         } else if (event.key === "Tab") {
           event.preventDefault();
           const focused = buttons.findIndex(button => button.matches(":focus"));
-          buttons[(Math.max(focused, 0) + (event.shiftKey ? 2 : 1)) % 3].focus({ preventScroll: true });
+          buttons[(Math.max(focused, 0) + 1) % buttons.length].focus({ preventScroll: true });
         }
       } else if ([" ", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End", "Tab"].includes(event.key)) event.preventDefault();
     }, { capture: true, signal });
@@ -68,10 +68,10 @@
     window.addEventListener("pagehide", () => finish(), { signal });
     document.addEventListener("visibilitychange", () => { if (document.hidden) finish(); }, { signal });
 
-    function confirm(love) {
+    function confirm() {
       if (done || mode !== "preview") return;
       finish(false);
-      send({ type: "taste:confirm", love });
+      send({ type: "taste:confirm" });
     }
 
     async function showPreview(preview) {
@@ -90,26 +90,23 @@
           #actions { display:flex; gap:8px; flex-wrap:wrap; }
           button { font:inherit; padding:8px 14px; border:1px solid #a4b7ac; border-radius:6px;
             background:#fff; color:#15231d; cursor:pointer; }
-          #save, #love { background:#16834a; color:white; border-color:#16834a; }
-          button:focus-visible, button[data-preferred] { outline:3px solid #73bc90; outline-offset:3px; }
+          #save { background:#16834a; color:white; border-color:#16834a; }
+          button:focus-visible { outline:3px solid #73bc90; outline-offset:3px; }
           #keys { margin:14px 0 0; max-width:360px; font-size:12px; color:#53645b; }
         </style>
         <section id="card" role="dialog" aria-modal="true" aria-labelledby="heading" aria-describedby="size keys">
           <h2 id="heading">Save this snip?</h2>
           <img alt="Preview of your snip">
           <p id="size"></p>
-          <div id="actions"><button id="save" type="button">Save</button><button id="love" type="button">♥ Save</button><button id="discard" type="button">Discard</button></div>
-          <p id="keys">Enter: Save · Shift+Enter or L: ♥ Save · Esc: Discard</p>
+          <div id="actions"><button id="save" type="button">Save</button><button id="discard" type="button">Discard</button></div>
+          <p id="keys">Enter: Save · Esc: Discard</p>
         </section>`);
       const card = shadow.getElementById("card"), image = shadow.querySelector("img");
       image.src = preview.dataUrl;
       shadow.getElementById("size").textContent = `${preview.width} x ${preview.height}`;
-      buttons = ["save", "love", "discard"].map(id => shadow.getElementById(id));
-      buttons[0].addEventListener("click", () => confirm(false), { signal: phaseController.signal });
-      buttons[1].addEventListener("click", () => confirm(true), { signal: phaseController.signal });
-      buttons[2].addEventListener("click", () => finish(), { signal: phaseController.signal });
-      const preferred = buttons[preview.love ? 1 : 0];
-      preferred.setAttribute("data-preferred", "");
+      buttons = ["save", "discard"].map(id => shadow.getElementById(id));
+      buttons[0].addEventListener("click", confirm, { signal: phaseController.signal });
+      buttons[1].addEventListener("click", () => finish(), { signal: phaseController.signal });
       timeout = setTimeout(() => finish(), Math.max(0, preview.expiresAt - Date.now()));
       await image.decode();
       if (done) return;
@@ -127,7 +124,7 @@
         x = clamp(rect.x, innerWidth - width); y = rect.y - gap - height;
       }
       Object.assign(card.style, { left: `${Math.max(margin, x)}px`, top: `${Math.max(margin, y)}px`, visibility: "visible" });
-      preferred.focus({ preventScroll: true });
+      buttons[0].focus({ preventScroll: true });
     }
 
     const shadow = mount(`
@@ -140,8 +137,8 @@
         #hint { position:absolute; left:50%; top:20px; transform:translateX(-50%); padding:10px 16px;
           background:#15231d; color:#fff; border-radius:8px; font:14px/1.4 system-ui; pointer-events:none; }
       </style>
-      <div id="surface" tabindex="-1" role="dialog" aria-label="Drag to snip. Hold Shift to prefer love. Escape cancels.">
-        <div id="hint">Drag to snip · Shift to prefer love · Esc to cancel</div><div id="box"></div>
+      <div id="surface" tabindex="-1" role="dialog" aria-label="Drag to snip. Escape cancels.">
+        <div id="hint">Drag to snip · Esc to cancel</div><div id="box"></div>
       </div>`);
     const surface = shadow.getElementById("surface"), box = shadow.getElementById("box");
     const phaseSignal = phaseController.signal;
@@ -166,7 +163,7 @@
     }, { signal: phaseSignal });
     surface.addEventListener("pointerup", async event => {
       if (!start || event.pointerId !== pointerId || done || mode !== "selection") return;
-      const rect = rectAt(event), love = event.shiftKey;
+      const rect = rectAt(event);
       if (rect.w < 2 || rect.h < 2) { finish(); return; }
       mode = "capturing";
       removeCard();
@@ -174,7 +171,7 @@
       await new Promise(requestAnimationFrame);
       if (done) return;
       if (innerWidth !== viewport.w || innerHeight !== viewport.h || devicePixelRatio !== viewport.dpr) { finish(); return; }
-      const response = await send({ type: "taste:snip", rect, love, viewport });
+      const response = await send({ type: "taste:snip", rect, viewport });
       if (done) return;
       if (response?.preview) showPreview(response.preview).catch(() => finish());
       else finish(false);
